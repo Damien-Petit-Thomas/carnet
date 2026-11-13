@@ -1,0 +1,15 @@
+backup_notes() {
+    local now
+    now=$(date +%F_%H-%M-%S)
+    local dest="$backupdir/backup_$now"
+
+    mkdir -p "$backupdir"
+    cp -R "$folder" "$dest"
+
+    # garder seulement les 10 derniers backups
+    ls -1dt "$backupdir"/backup_* 2>/dev/null | tail -n +11 | xargs rm -rf 2>/dev/null || true
+
+    notify "Backup created: $dest"
+    echo "✓ $dest"
+    sleep 1
+}

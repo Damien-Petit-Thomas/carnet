@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: deps (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fzf ripgrep bat bats
+
+      - name: deps (macos)
+        if: runner.os == 'macOS'
+        run: brew install bash findutils fzf ripgrep bat bats-core
+
+      - name: tests
+        run: bats tests
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          cat lib/config lib/platform lib/utils lib/core lib/server lib/notes \
+              lib/search lib/backup lib/git lib/navigation lib/trash lib/links \
+              lib/review lib/lexicon > /tmp/all.sh
+          shellcheck -s bash -S warning -e SC2034,SC2164,SC2155 /tmp/all.sh install.sh

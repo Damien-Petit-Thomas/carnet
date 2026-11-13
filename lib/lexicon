@@ -1,0 +1,120 @@
+# Abréviations et glossaire mkdocs (extension abbr + snippets auto_append).
+# Une entrée par ligne : *[TERME]: définition
+# Chaque terme devient une infobulle sur toutes les pages du site.
+
+_lex_file() {
+    case "$1" in
+        abbr)  echo "$includesdir/abbreviations.md" ;;
+        gloss) echo "$includesdir/glossary.md" ;;
+    esac
+}
+
+# Définition actuelle de TERME, ou vide.
+_lex_get() {
+    local file
+    file=$(_lex_file "$1")
+    [[ -f "$file" ]] || return 0
+    LEX_T="$2" awk '
+        BEGIN { p = "*[" ENVIRON["LEX_T"] "]:" }
+        index($0, p) == 1 { d = substr($0, length(p) + 1); sub(/^ +/, "", d); print d; exit }
+    ' "$file"
+}
+
+# Ajoute ou remplace TERME, fichier trié sans tenir compte de la casse.
+_lex_set() {
+    local file tmp
+    file=$(_lex_file "$1")
+    mkdir -p "$(dirname "$file")"
+    touch "$file"
+    tmp=$(mktemp)
+    LEX_T="$2" LEX_D="$3" awk '
+        BEGIN { p = "*[" ENVIRON["LEX_T"] "]:" }
+        index($0, p) == 1 { next }
+        NF { print }
+        END { print p " " ENVIRON["LEX_D"] }
+    ' "$file" | sort -f > "$tmp"
+    mv "$tmp" "$file"
+}
+
+# lexicon_add abbr|gloss [TERME [DÉFINITION…]]
+lexicon_add() {
+    local kind="$1"; shift
+    local term="${1:-}"
+    (( $# > 0 )) && shift
+    local def="$*" existing answer
+
+    if [[ -z "$term" ]]; then
+        echo -n " terme: "
+        read -re term
+    fi
+    [[ -z "$term" ]] && return 0
+    if [[ "$term" == *"]"* || "$term" == *$'\n'* ]]; then
+        echo "✗ invalid term: '$term'"
+        return 1
+    fi
+
+    existing=$(_lex_get "$kind" "$term")
+    [[ -n "$existing" ]] && echo "  actuel : $existing"
+
+    if [[ -z "$def" ]]; then
+        echo -n " définition: "
+        read -re def
+    fi
+    [[ -z "$def" ]] && return 0
+
+    if [[ -n "$existing" && "$existing" != "$def" ]]; then
+        echo -n " remplacer ? [y/N]: "
+        read -re answer || answer=""
+        [[ "$answer" != "y" ]] && { echo "→ unchanged"; return 0; }
+    fi
+
+    _lex_set "$kind" "$term" "$def"
+    echo "✓ *[$term]: $def  →  ${includesdir#$folder/}/$(basename "$(_lex_file "$kind")")"
+    [[ "$CARNET_AUTOSYNC" == "1" ]] && git_sync_background
+    return 0
+}
+
+# Liste les entrées dans fzf : "+ NEW" pour ajouter, une entrée pour l'éditer.
+lexicon_browse() {
+    local kind="$1" file label choice line
+    file=$(_lex_file "$kind")
+    [[ "$kind" == abbr ]] && label="abbr" || label="gloss"
+
+    choice=$(
+        {
+            echo "+ NEW"
+            [[ -f "$file" ]] && awk '
+                match($0, /^\*\[[^]]+\]:/) {
+                    printf "%d\t%s\t%s\n", NR, substr($0, 3, RLENGTH - 4), substr($0, RLENGTH + 2)
+                }' "$file"
+        } | fzf \
+            --delimiter='\t' \
+            --with-nth=2.. \
+            --prompt="  $label > " \
+            --height=60% \
+            --layout=reverse \
+            --border=rounded \
+            --no-preview \
+            --header="enter: éditer  |  + NEW: ajouter" \
+            --color="prompt:#83a598,pointer:#fabd2f"
+    ) || return 0
+
+    if [[ "$choice" == "+ NEW" ]]; then
+        lexicon_add "$kind"
+        sleep 1
+    else
+        line=$(cut -f1 <<< "$choice")
+        open_editor "+$line" "$file"
+    fi
+    return 0
+}
+
+# carnet abbr|gloss [TERME [DÉFINITION…]]
+lexicon_cmd() {
+    local kind="$1"; shift
+    if (( $# == 0 )); then
+        lexicon_browse "$kind"
+    else
+        lexicon_add "$kind" "$@"
+    fi
+}

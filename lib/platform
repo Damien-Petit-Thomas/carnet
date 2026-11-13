@@ -1,0 +1,110 @@
+# Différences macOS / Linux, regroupées ici.
+# Le reste du code suppose GNU find et un binaire "bat" : sur macOS
+# (gfind) et Debian/Ubuntu (batcat), un dossier de shims les fournit
+# sous ces noms, uniquement dans l'environnement de carnet.
+
+CARNET_OS="$(uname -s)"
+
+_setup_shims() {
+    local shims="${XDG_CACHE_HOME:-$HOME/.cache}/carnet/shims"
+    local need=0
+
+    if ! find --version 2>/dev/null | grep -q GNU; then
+        if command -v gfind &>/dev/null; then
+            mkdir -p "$shims"; ln -sf "$(command -v gfind)" "$shims/find"; need=1
+        else
+            echo "✗ GNU find required (macOS: brew install findutils)"
+            exit 1
+        fi
+    fi
+
+    if ! command -v bat &>/dev/null && command -v batcat &>/dev/null; then
+        mkdir -p "$shims"; ln -sf "$(command -v batcat)" "$shims/bat"; need=1
+    fi
+
+    (( need )) && export PATH="$shims:$PATH"
+    return 0
+}
+
+check_deps() {
+    _setup_shims
+    local deps=(fzf rg bat git perl "${EDITOR:-vim}")
+    local missing=() cmd
+    for cmd in "${deps[@]}"; do
+        command -v "${cmd%% *}" &>/dev/null || missing+=("$cmd")
+    done
+    if (( ${#missing[@]} > 0 )); then
+        echo "✗ Missing dependencies: ${missing[*]}"
+        echo "  see: $CARNET_ROOT/README.md#installation"
+        exit 1
+    fi
+}
+
+notify() {
+    local msg="$1"
+    if command -v terminal-notifier &>/dev/null; then
+        terminal-notifier -message "$msg" -title "carnet" -sound default
+    elif command -v notify-send &>/dev/null && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+        notify-send "carnet" "$msg"
+    else
+        echo "→ $msg"
+    fi
+}
+
+open_url() {
+    if [[ "$CARNET_OS" == Darwin ]]; then
+        open "$1"
+    elif command -v xdg-open &>/dev/null; then
+        xdg-open "$1" &>/dev/null &
+    else
+        echo "→ $1"
+    fi
+}
+
+# Écrit l'image PNG du presse-papier dans FILE ; échoue s'il n'y en a pas.
+clipboard_png() {
+    local out="$1"
+    if command -v pngpaste &>/dev/null; then
+        pngpaste "$out" &>/dev/null || true
+    elif [[ "$CARNET_OS" == Darwin ]]; then
+        osascript \
+            -e 'on run argv' \
+            -e 'set f to open for access (POSIX file (item 1 of argv)) with write permission' \
+            -e 'try' \
+            -e 'write (the clipboard as «class PNGf») to f' \
+            -e 'on error e' \
+            -e 'close access f' \
+            -e 'error e' \
+            -e 'end try' \
+            -e 'close access f' \
+            -e 'end run' "$out" &>/dev/null || true
+    elif [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wl-paste &>/dev/null; then
+        wl-paste --type image/png > "$out" 2>/dev/null || true
+    elif command -v xclip &>/dev/null; then
+        xclip -selection clipboard -t image/png -o > "$out" 2>/dev/null || true
+    fi
+    [[ -s "$out" ]]
+}
+
+# date_shift AAAA-MM-JJ JOURS [FORMAT] — date décalée (perl : portable).
+date_shift() {
+    perl -MTime::Local -MPOSIX=strftime -e '
+        my ($y, $m, $d) = split /-/, $ARGV[0];
+        my $t = timelocal(0, 0, 12, $d, $m - 1, $y) + 86400 * $ARGV[1];
+        print strftime($ARGV[2], localtime $t);
+    ' "$1" "$2" "${3:-%F}"
+}
+
+# Date de modification d'un fichier, "AAAA-MM-JJ HH:MM:SS".
+file_mtime() {
+    perl -MPOSIX=strftime -e 'print strftime("%F %T", localtime((stat $ARGV[0])[9]))' "$1"
+}
+
+# Port TCP local déjà occupé ?
+port_in_use() {
+    if command -v lsof &>/dev/null; then
+        lsof -ti ":$1" &>/dev/null
+    else
+        (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+    fi
+}

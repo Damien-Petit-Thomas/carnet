@@ -1,0 +1,369 @@
+# Templates : fichiers .md dans $templatesdir (créé depuis les défauts du repo).
+# Variables : {{name}} {{date}} {{time}} {{datetime}}
+_ensure_templates() {
+    [[ -d "$templatesdir" ]] && return 0
+    mkdir -p "$templatesdir"
+    cp "$CARNET_ROOT/lib/templates/"*.md "$templatesdir/"
+}
+
+_templates() {
+    _ensure_templates
+    find "$templatesdir" -maxdepth 1 -type f -name "*.md" -printf "%f\n" \
+        | sed 's/\.md$//' \
+        | sort \
+        | awk '$0 == "default" { print; next } { rest = rest $0 "\n" } END { printf "%s", rest }'
+}
+
+_apply_template() {
+    local tpl="$templatesdir/$1.md"
+    [[ -f "$tpl" ]] || tpl="$CARNET_ROOT/lib/templates/default.md"
+    N="$2" D="$(date +%F)" T="$(date +%H:%M)" perl -pe '
+        s/\{\{name\}\}/$ENV{N}/g;
+        s/\{\{datetime\}\}/$ENV{D} $ENV{T}/g;
+        s/\{\{date\}\}/$ENV{D}/g;
+        s/\{\{time\}\}/$ENV{T}/g;
+    ' "$tpl"
+}
+
+edit_templates() {
+    _ensure_templates
+    local tpl
+    tpl=$(
+        { _templates; echo "+ NEW TEMPLATE"; } | fzf \
+            --prompt=" edit template > " \
+            --height=40% \
+            --layout=reverse \
+            --border=rounded \
+            --preview="bat --style=numbers --color=always '$templatesdir/{}.md' 2>/dev/null" \
+            --preview-window=right:55%:wrap \
+            --color="prompt:#83a598,pointer:#fabd2f"
+    ) || return 0
+
+    if [[ "$tpl" == "+ NEW TEMPLATE" ]]; then
+        echo -n " template name: "
+        read -re tpl
+        [[ -z "$tpl" ]] && return 0
+        [[ -f "$templatesdir/$tpl.md" ]] || cp "$templatesdir/default.md" "$templatesdir/$tpl.md"
+    fi
+    ${EDITOR:-vim} "$templatesdir/$tpl.md"
+}
+
+new_note() {
+    local target_folder="$1"
+    local name template
+
+    echo -n " note name: "
+    read -re name
+
+    if [[ -z "$name" ]]; then
+        name="$(date +%T | tr ':' '-')"
+        target_folder="${wipdir}/$(date +%F)"
+    fi
+
+    template=$(
+        _templates | fzf \
+            --prompt=" template > " \
+            --height=30% \
+            --layout=reverse \
+            --border=rounded \
+            --preview="bat --style=plain --color=always '$templatesdir/{}.md' 2>/dev/null" \
+            --preview-window=right:55%:wrap \
+            --color="prompt:#83a598,pointer:#fabd2f"
+    ) || template="default"
+
+    local filepath="$target_folder/${name}.md"
+    mkdir -p "$(dirname "$filepath")"
+
+    if [[ ! -f "$filepath" ]]; then
+        _apply_template "$template" "$(basename "$name")" > "$filepath"
+    fi
+
+    open_editor "$filepath"
+}
+
+new_folder() {
+    local parent="$1"
+    local name
+
+    echo -n " folder name (in $(basename "$parent")): "
+    read -re name
+
+    [[ -z "$name" ]] && name="$(date +%T | tr ':' '-')"
+
+    mkdir -p "$parent/$name"
+    current_folder="$parent/$name"
+}
+
+# ─── daily ────────────────────────────────────────────────────────────
+
+# Dernière daily antérieure à aujourd'hui (nom de fichier sans .md), ou vide.
+_prev_daily() {
+    local today="$1"
+    find "$dailydir" -maxdepth 1 -type f -name '????-??-??.md' -printf '%f\n' 2>/dev/null \
+        | sed 's/\.md$//' \
+        | sort \
+        | awk -v t="$today" '$0 < t' \
+        | tail -1
+}
+
+# Crée la daily du jour si absente : reprend les todos non cochés de la
+# précédente (marqués "- [>]" là-bas) et ajoute un lien vers elle.
+# Affiche le chemin du fichier.
+_ensure_daily() {
+    local today prev filepath carried=""
+    today=$(date +%F)
+    filepath="$dailydir/${today}.md"
+    mkdir -p "$dailydir"
+
+    if [[ ! -f "$filepath" ]]; then
+        prev=$(_prev_daily "$today")
+
+        if [[ -n "$prev" ]]; then
+            local prevfile="$dailydir/${prev}.md"
+            carried=$(rg --no-line-number '^\s*- \[ \]\s+\S' "$prevfile" 2>/dev/null || true)
+            if [[ -n "$carried" ]]; then
+                perl -pi -e 's/^(\s*- )\[ \](?=\s+\S)/$1\[>\]/' "$prevfile"
+            fi
+        fi
+
+        {
+            printf -- '---\ntags:\n  - daily\ndate: %s\n---\n\n# %s\n\n' "$today" "$today"
+            [[ -n "$prev" ]] && printf '[← %s](%s.md)\n\n' "$prev" "$prev"
+            printf '## todo\n\n'
+            if [[ -n "$carried" ]]; then
+                printf '%s\n' "$carried"
+            else
+                printf -- '- [ ]\n'
+            fi
+            printf '\n## notes\n\n'
+        } > "$filepath"
+    fi
+
+    echo "$filepath"
+}
+
+daily_note() {
+    open_editor "$(_ensure_daily)"
+}
+
+# Capture rapide : ajoute "- HH:MM texte" à la fin de la daily du jour.
+# Texte depuis les arguments, stdin (pipe) ou saisie interactive.
+quick_add() {
+    local text filepath
+    if (( $# > 0 )); then
+        text="$*"
+    elif [[ ! -t 0 ]]; then
+        text=$(cat)
+    else
+        echo -n " add: "
+        read -re text
+    fi
+
+    [[ -z "${text//[[:space:]]/}" ]] && { echo "✗ nothing to add"; return 1; }
+
+    filepath=$(_ensure_daily)
+    # garantir un saut de ligne final avant d'ajouter
+    [[ -s "$filepath" && "$(tail -c1 "$filepath")" != "" ]] && echo >> "$filepath"
+
+    local first=1 line
+    while IFS= read -r line; do
+        if (( first )); then
+            printf -- '- %s %s\n' "$(date +%H:%M)" "$line" >> "$filepath"
+            first=0
+        else
+            printf '  %s\n' "$line" >> "$filepath"
+        fi
+    done <<< "$text"
+
+    echo "✓ added to daily/$(basename "$filepath")"
+    [[ "$CARNET_AUTOSYNC" == "1" ]] && git_sync_background
+    return 0
+}
+
+# ─── listes ───────────────────────────────────────────────────────────
+
+recent_notes() {
+    local file
+
+    file=$(
+        find "$folder" -name "*.md" ! -path "*/assets/*" -printf "%T@ %p\n" \
+        | sort -nr \
+        | head -20 \
+        | cut -d' ' -f2- \
+        | sed "s|^$folder/||;s|\.md$||" \
+        | fzf \
+            --prompt=" recent > " \
+            --height=60% \
+            --layout=reverse \
+            --border=rounded \
+            --color="prompt:#83a598,pointer:#fabd2f" \
+            --preview="bat --style=numbers --color=always '$folder/{}.md' 2>/dev/null" \
+            --preview-window=right:55%:wrap
+    ) || return 0
+
+    [[ -n "$file" ]] && open_editor "$folder/${file}.md"
+}
+
+# ─── favoris ──────────────────────────────────────────────────────────
+# .favorites : un chemin relatif par ligne, sans .md
+
+_fav_replace() {
+    # _fav_replace OLD [NEW] — renomme ou supprime (NEW vide) une entrée
+    [[ -f "$favorites" ]] || return 0
+    local tmp
+    tmp=$(mktemp)
+    awk -v o="$1" -v n="${2:-}" '$0 == o { if (n != "") print n; next } { print }' \
+        "$favorites" > "$tmp" && mv "$tmp" "$favorites"
+}
+
+toggle_favorite() {
+    local note="$1"
+    touch "$favorites"
+    if grep -qxF "$note" "$favorites"; then
+        _fav_replace "$note"
+        echo "☆ removed from favorites"
+    else
+        echo "$note" >> "$favorites"
+        echo "★ added to favorites"
+    fi
+    [[ "${2:-}" == "--quiet" ]] || sleep 0.8
+}
+
+open_favorites() {
+    [[ ! -f "$favorites" ]] && touch "$favorites"
+
+    # purger les entrées dont la note n'existe plus
+    local entry kept=()
+    while IFS= read -r entry; do
+        [[ -n "$entry" && -f "$folder/${entry}.md" ]] && kept+=("$entry")
+    done < "$favorites"
+    if (( ${#kept[@]} > 0 )); then
+        printf '%s\n' "${kept[@]}" > "$favorites"
+    else
+        : > "$favorites"
+    fi
+
+    if [[ ! -s "$favorites" ]]; then
+        echo "★ No favorites yet. Open a note, then choose ★ favorite."
+        sleep 1.5
+        return
+    fi
+
+    local file
+    file=$(
+        fzf < "$favorites" \
+            --prompt="★ favorites > " \
+            --height=60% \
+            --layout=reverse \
+            --border=rounded \
+            --color="prompt:#fabd2f,pointer:#fabd2f" \
+            --preview="bat --style=numbers --color=always '$folder/{}.md' 2>/dev/null" \
+            --preview-window=right:55%:wrap
+    ) || return 0
+
+    [[ -n "$file" ]] && open_editor "$folder/${file}.md"
+}
+
+# ─── actions sur une note ─────────────────────────────────────────────
+
+rename_note() {
+    local note="$1"
+    local filepath="$folder/$note.md"
+    local dir new_name
+    last_note="$note"
+
+    dir=$(dirname "$filepath")
+    echo -n " new name: "
+    read -re new_name
+
+    [[ -z "$new_name" ]] && return
+    if [[ "$new_name" == */* ]]; then
+        echo "✗ no '/' in name — use move"
+        sleep 1.2
+        return
+    fi
+    if [[ -e "$dir/${new_name}.md" ]]; then
+        echo "✗ '$new_name' already exists"
+        sleep 1.2
+        return
+    fi
+
+    mv -n "$filepath" "$dir/${new_name}.md"
+    local newrel="${dir#$folder}/${new_name}"
+    _fav_replace "$note" "${newrel#/}"
+    last_note="${newrel#/}"
+    echo "✓ renamed to $new_name"
+    sleep 0.8
+}
+
+move_note() {
+    local note="$1"
+    local filepath="$folder/$note.md"
+    local dest="$folder"
+    last_note="$note"
+
+    while true; do
+        local choice
+        choice=$(
+            ( echo "✓ MOVE HERE"; echo "↑ UP"; get_folders "$dest" ) \
+            | fzf \
+                --prompt=" move to ($(echo "${dest#$folder/}" | sed "s|^${folder}\$|root|")) > " \
+                --height=40% \
+                --layout=reverse \
+                --border=rounded \
+                --no-preview \
+                --color="prompt:#83a598,pointer:#fabd2f"
+        ) || return 0
+
+        case "$choice" in
+            "✓ MOVE HERE")
+                local target
+                target="$dest/$(basename "$filepath")"
+                if [[ -e "$target" ]]; then
+                    echo "✗ a note with that name already exists there"
+                    sleep 1.2
+                    return
+                fi
+                mv -n "$filepath" "$dest/"
+                local newrel="${target#$folder/}"
+                _fav_replace "$note" "${newrel%.md}"
+                last_note="${newrel%.md}"
+                echo "✓ moved to ${dest#$folder/}"
+                sleep 0.8
+                return
+                ;;
+            "↑ UP")
+                [[ "$dest" != "$folder" ]] && dest=$(dirname "$dest")
+                ;;
+            *)
+                dest="$dest/$choice"
+                ;;
+        esac
+    done
+}
+
+_note_actions() {
+    local note="$1"
+    local action fav_label="☆ favorite"
+
+    [[ -f "$favorites" ]] && grep -qxF "$note" "$favorites" && fav_label="★ unfavorite"
+
+    action=$(printf '%s\n' "✎ edit" "$fav_label" " backlinks" " rename" " move" "✗ delete" \
+        | fzf \
+            --prompt="  $note > " \
+            --height=25% \
+            --layout=reverse \
+            --border=rounded \
+            --no-preview \
+            --color="prompt:#fabd2f,pointer:#fb4934"
+    ) || return 0
+
+    case "$action" in
+        "✎ edit")       open_editor "$folder/${note}.md" ;;
+        "☆ favorite"|"★ unfavorite") toggle_favorite "$note" ;;
+        " backlinks")   show_backlinks "$folder/${note}.md" ;;
+        " rename")      rename_note "$note" ;;
+        " move")        move_note "$note" ;;
+        "✗ delete")     delete_note "$note" ;;
+    esac
+}

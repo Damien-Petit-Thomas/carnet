@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "✗ carnet needs bash >= 4 (current: $BASH_VERSION). macOS: brew install bash" >&2
+    exit 1
+fi
+
+# Racine du dépôt, même si bin/carnet est appelé via un lien symbolique.
+_src="${BASH_SOURCE[0]}"
+while [[ -L "$_src" ]]; do
+    _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+    _src="$(readlink "$_src")"
+    [[ "$_src" == /* ]] || _src="$_dir/$_src"
+done
+CARNET_ROOT="$(cd -P "$(dirname "$_src")/.." && pwd)"
+CARNET_BIN="$CARNET_ROOT/bin/carnet"
+export CARNET_BIN
+unset _src _dir
+
+source "$CARNET_ROOT/lib/config"
+source "$CARNET_ROOT/lib/platform"
+source "$CARNET_ROOT/lib/utils"
+source "$CARNET_ROOT/lib/core"
+source "$CARNET_ROOT/lib/server"
+source "$CARNET_ROOT/lib/notes"
+source "$CARNET_ROOT/lib/search"
+source "$CARNET_ROOT/lib/backup"
+source "$CARNET_ROOT/lib/git"
+source "$CARNET_ROOT/lib/navigation"
+source "$CARNET_ROOT/lib/trash"
+source "$CARNET_ROOT/lib/links"
+source "$CARNET_ROOT/lib/review"
+source "$CARNET_ROOT/lib/lexicon"
+
+usage() {
+    cat << EOF
+carnet — notes markdown en CLI ($folder)
+
+usage:
+  carnet                  menu interactif
+  carnet <query>          ouvre la note la plus proche (fuzzy)
+  carnet new              nouvelle note (avec template)
+  carnet daily            note du jour (reprend les todos d'hier)
+  carnet add <texte>      ajoute une ligne horodatée à la note du jour
+                          (aussi : echo texte | carnet add)
+  carnet todo             cases [ ] non cochées (ctrl-x : cocher/décocher, tab : multi)
+                          échéance : "- [ ] truc @2026-11-14"
+  carnet triage           trier inbox/ et wip/ note par note
+  carnet week [N]         revue de la semaine (N semaines en arrière)
+  carnet templates        éditer / créer les templates ($templatesdir)
+  carnet restore          restaurer une note de la corbeille
+  carnet abbr [SIGLE déf]  abréviations mkdocs (sans argument : liste)
+  carnet gloss [TERME déf] glossaire mkdocs (sans argument : liste)
+  carnet search           recherche plein texte
+  carnet tags             recherche par tag
+  carnet recent           20 dernières notes modifiées
+  carnet fav              favoris
+  carnet backup           copie dans $backupdir (10 gardées)
+  carnet sync             git commit + push
+  carnet serve|stop|status  serveur mkdocs (port $MKDOCS_PORT)
+  carnet help             cette aide
+
+dans vim (ouvert par carnet) :
+  <leader>nl lien vers une note    <leader>nb backlinks
+  <leader>ni coller une image      <leader>nf favori
+
+env:
+  CARNET_DIR, CARNET_BACKUP_DIR, CARNET_TRASH_DIR, CARNET_TEMPLATES_DIR,
+  CARNET_TRASH_DAYS (défaut 30), MKDOCS_PORT
+  EDITOR (défaut vim)
+  CARNET_AUTOSYNC=1       commit + push en arrière-plan après chaque édition
+EOF
+}
+
+case "${1:-}" in
+    help|-h|--help) usage; exit ;;
+    version|--version) echo "carnet $(cat "$CARNET_ROOT/VERSION" 2>/dev/null || echo dev)"; exit ;;
+esac
+
+check_deps
+
+case "${1:-}" in
+    serve)   server_start ;;
+    stop)    server_stop ;;
+    status)  server_status ;;
+    sync)    git_sync ;;
+    backup)  backup_notes ;;
+    new)     new_note "$folder" ;;
+    daily)   daily_note ;;
+    add)     shift; quick_add "$@" ;;
+    todo)    search_todos ;;
+    triage)  triage ;;
+    week)    week_review "${2:-0}" ;;
+    templates) edit_templates ;;
+    restore) restore_note ;;
+    abbr)    shift; lexicon_cmd abbr "$@" ;;
+    gloss)   shift; lexicon_cmd gloss "$@" ;;
+    search)  search_notes ;;
+    tags)    search_tags ;;
+    recent)  recent_notes ;;
+    fav)     open_favorites ;;
+    "")      start_navigation ;;
+    # ── internes (vim, fzf, complétion) ──
+    _notes)     get_notes "$folder" | sort ;;
+    _todos)     _todo_list ;;
+    _toggle)    toggle_todo "$2" "$3" ;;
+    _toggle_list) toggle_todos_from "$2" ;;
+    _link)      pick_link "$2" ;;
+    _backlinks) show_backlinks "$2" --print ;;
+    _image)     paste_image "$2" ;;
+    _fav)       rel="${2#$folder/}"; toggle_favorite "${rel%.md}" --quiet ;;
+    *)
+        match=$(get_notes "$folder" | fzf --filter="$*" | head -1) || true
+        if [[ -n "$match" ]]; then
+            open_editor "$folder/${match}.md"
+        else
+            echo "✗ no note matching '$*'"
+            exit 1
+        fi
+        ;;
+esac

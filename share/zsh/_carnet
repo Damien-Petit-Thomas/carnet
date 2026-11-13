@@ -1,0 +1,38 @@
+#compdef carnet
+# Complétion zsh de carnet (lien symbolique dans un dossier du $fpath).
+
+_carnet() {
+    local -a cmds notes
+    cmds=(
+        'new:nouvelle note'
+        'daily:note du jour'
+        'add:ajouter une ligne à la note du jour'
+        'todo:cases non cochées'
+        'triage:trier inbox et wip'
+        'week:revue de la semaine'
+        'templates:éditer les templates'
+        'restore:restaurer depuis la corbeille'
+        'abbr:abréviations mkdocs'
+        'gloss:glossaire mkdocs'
+        'search:recherche plein texte'
+        'tags:recherche par tag'
+        'recent:notes récentes'
+        'fav:favoris'
+        'backup:sauvegarde'
+        'sync:git commit + push'
+        'serve:démarrer mkdocs'
+        'stop:arrêter mkdocs'
+        'status:état de mkdocs'
+        'help:aide'
+    )
+
+    if (( CURRENT == 2 )); then
+        _describe -t commands 'commande' cmds
+        notes=("${(@f)$(carnet _notes 2>/dev/null)}")
+        _wanted notes expl 'note' compadd -a notes
+    elif [[ $words[2] == week ]]; then
+        _message 'nombre de semaines en arrière (0 = cette semaine)'
+    fi
+}
+
+_carnet "$@"

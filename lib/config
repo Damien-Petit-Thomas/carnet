@@ -1,0 +1,22 @@
+folder="${CARNET_DIR:-$HOME/notes/docs}"
+wipdir="$folder/wip"
+dailydir="$folder/daily"
+backupdir="${CARNET_BACKUP_DIR:-$HOME/notes/backup}"
+inboxdir="$folder/inbox"
+includesdir="$folder/includes"
+trashdir="${CARNET_TRASH_DIR:-$HOME/notes/trash}"
+templatesdir="${CARNET_TEMPLATES_DIR:-$HOME/notes/templates}"
+CARNET_TRASH_DAYS="${CARNET_TRASH_DAYS:-30}"
+favorites="$folder/.favorites"
+current_folder="$folder"
+
+# 1 = commit + push en arrière-plan après chaque édition
+CARNET_AUTOSYNC="${CARNET_AUTOSYNC:-0}"
+CARNET_TMP="${TMPDIR:-/tmp}"
+CARNET_TMP="${CARNET_TMP%/}/carnet-$(id -u)"
+mkdir -p "$CARNET_TMP"
+CARNET_LOCK="$CARNET_TMP/sync.lock"
+
+MKDOCS_PORT="${MKDOCS_PORT:-8000}"
+MKDOCS_PID_FILE="$CARNET_TMP/mkdocs.pid"
+MKDOCS_LOG="$CARNET_TMP/mkdocs.log"

@@ -1,0 +1,38 @@
+get_notes() {
+    find "$1" -type f -name "*.md" ! -path "*/assets/*" -print0 \
+        | while IFS= read -r -d '' file; do
+            rel="${file#$1/}"
+            echo "${rel%.md}"
+        done
+}
+
+get_folders() {
+    find "$1" -mindepth 1 -maxdepth 1 -type d ! -name ".*" -printf "%f\n"
+}
+
+# Affiche "fichier<TAB>tag" pour chaque tag du frontmatter YAML.
+# Gère : "tags: []", "tags: [a, b]", "tags: a, b" et la forme liste "  - a".
+note_tags() {
+    find "$folder" -type f -name "*.md" ! -path "*/assets/*" -print0 \
+        | xargs -0 awk '
+            function emit(t) {
+                gsub(/["'\''\[\]]/, "", t)
+                gsub(/^[ \t]+|[ \t]+$/, "", t)
+                if (t != "") print FILENAME "\t" t
+            }
+            FNR == 1 { infm = 0; intags = 0
+                       if ($0 != "---") nextfile
+                       infm = 1; next }
+            infm && $0 == "---" { nextfile }
+            infm {
+                if ($0 ~ /^tags:/) {
+                    v = $0; sub(/^tags:[ \t]*/, "", v)
+                    intags = (v == "")
+                    n = split(v, a, ","); for (i = 1; i <= n; i++) emit(a[i])
+                    next
+                }
+                if (intags && $0 ~ /^[ \t]*-/) { t = $0; sub(/^[ \t]*-/, "", t); emit(t); next }
+                intags = 0
+            }
+        ' 2>/dev/null
+}

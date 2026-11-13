@@ -1,0 +1,138 @@
+menu() {
+    local items=(
+        " NEW NOTE"
+        " NEW FOLDER"
+        " DAILY NOTE"
+        "★ FAVORITES"
+        " RECENT"
+        " SEARCH"
+        " TAG SEARCH"
+        " BY DATE"
+        " BY SIZE"
+        " TODOS"
+        " TRIAGE"
+        " WEEK"
+        " TEMPLATES"
+        " ABBREVIATIONS"
+        " GLOSSARY"
+        " RESTORE"
+        " BACKUP"
+        " SYNC"
+    )
+
+    get_folders "$current_folder" | grep -q . && items+=(" FOLDERS")
+    [[ "$current_folder" != "$folder" ]]       && items+=("↑ UP")
+    _mkdocs_running \
+        && items+=(" SERVER STOP") \
+        || items+=(" SERVER START")
+
+    printf '%s\n' "${items[@]}"
+}
+
+_breadcrumb() {
+    local path="${1#$folder/}"
+    local root="${folder##*/}"
+
+    if [[ "$path" == "$1" ]] || [[ -z "$path" ]]; then
+        echo "$root"
+    else
+        echo "$root / ${path//\// / }"
+    fi
+}
+
+choose_menu() {
+    local cf crumb
+    cf="$current_folder"
+    crumb=$(_breadcrumb "$current_folder")
+    ( menu; get_notes "$current_folder" ) \
+        | fzf \
+            --prompt="  $crumb > " \
+            --height=80% \
+            --layout=reverse \
+            --border=rounded \
+            --color="prompt:#83a598,pointer:#fabd2f,hl:#fb4934,hl+:#fb4934" \
+            --preview="
+                item=\$(echo {} | tr -d \"'\")
+                note=\"${cf}/\${item}.md\"
+                if [[ -f \"\$note\" ]]; then
+                    words=\$(wc -w < \"\$note\")
+                    lines=\$(wc -l < \"\$note\")
+                    echo \"─── \$words words  \$lines lines ───\"
+                    echo \"\"
+                    bat --style=numbers,changes --color=always \"\$note\"
+                fi
+            " \
+            --preview-window=right:55%:wrap \
+            --bind="ctrl-p:toggle-preview" \
+            --bind="ctrl-j:down,ctrl-k:up" \
+            --bind="ctrl-d:half-page-down,ctrl-u:half-page-up" \
+            --header="ctrl-p: preview  |  ctrl-j/k: nav  |  enter: open  |  esc: quit"
+}
+
+choose_folders() {
+    local basefold
+    basefold="${current_folder##*/}"
+    ( echo "↑ UP"; get_folders "$current_folder" ) \
+        | fzf \
+            --prompt="  folder ($basefold) > " \
+            --height=40% \
+            --layout=reverse \
+            --border=rounded \
+            --no-preview \
+            --color="prompt:#83a598,pointer:#fabd2f"
+}
+
+navigate_folders() {
+    local choice
+    choice=$(choose_folders) || return 0
+    if [[ "$choice" == "↑ UP" ]]; then
+        current_folder=$(dirname "$current_folder")
+    elif [[ -d "$current_folder/$choice" ]]; then
+        current_folder="$current_folder/$choice"
+    fi
+}
+
+start_navigation() {
+    while true; do
+        local choice
+        choice=$(choose_menu) || break
+        # une action qui échoue (ÉCHAP dans fzf…) ne doit pas quitter carnet
+        _dispatch "$choice" || true
+    done
+}
+
+_dispatch() {
+    local choice="$1"
+    case "$choice" in
+        " NEW NOTE")      new_note "$current_folder" ;;
+        " NEW FOLDER")    new_folder "$current_folder" ;;
+        " DAILY NOTE")    daily_note ;;
+        "★ FAVORITES")    open_favorites ;;
+        " RECENT")        recent_notes ;;
+        " SEARCH")        search_notes ;;
+        " TAG SEARCH")    search_tags ;;
+        " BY DATE")       search_by_date ;;
+        " BY SIZE")       search_by_size ;;
+        " TODOS")         search_todos ;;
+        " TRIAGE")        triage ;;
+        " WEEK")          week_review 0 ;;
+        " TEMPLATES")     edit_templates ;;
+        " ABBREVIATIONS") lexicon_browse abbr ;;
+        " GLOSSARY")      lexicon_browse gloss ;;
+        " RESTORE")       restore_note ;;
+        " BACKUP")        backup_notes ;;
+        " SYNC")          git_sync ;;
+        " FOLDERS")       navigate_folders ;;
+        "↑ UP")           current_folder=$(dirname "$current_folder") ;;
+        " SERVER START")  server_start ;;
+        " SERVER STOP")   server_stop ;;
+        *)
+            local target="$current_folder/${choice}.md"
+            if [[ -f "$target" ]]; then
+                local rel="${target#$folder/}"
+                rel="${rel%.md}"
+                _note_actions "$rel"
+            fi
+            ;;
+    esac
+}

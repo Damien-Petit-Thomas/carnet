@@ -1,0 +1,70 @@
+# Corbeille : $trashdir/<horodatage>/<chemin relatif>.md
+# L'arborescence d'origine est conservée, ce qui permet la restauration.
+
+# Supprime les entrées plus vieilles que $CARNET_TRASH_DAYS jours.
+purge_trash() {
+    [[ -d "$trashdir" ]] || return 0
+    find "$trashdir" -mindepth 1 -maxdepth 1 -type d \
+        -mtime +"$CARNET_TRASH_DAYS" -exec rm -rf {} + 2>/dev/null || true
+}
+
+delete_note() {
+    local note="$1"
+    local filepath="$folder/$note.md"
+    local confirm
+
+    echo -n " delete '$note' ? [y/N]: "
+    read -re confirm
+
+    [[ "$confirm" != "y" ]] && return 0
+
+    local stamp target
+    stamp=$(date +%F_%H-%M-%S)
+    target="$trashdir/$stamp/$note.md"
+    mkdir -p "$(dirname "$target")"
+    mv -n "$filepath" "$target"
+    _fav_replace "$note"
+    purge_trash
+    echo "✓ moved to trash ($stamp) — 'carnet restore' to undo"
+    sleep 1
+}
+
+# Liste "horodatage/chemin" des notes en corbeille, plus récentes d'abord.
+_trash_entries() {
+    [[ -d "$trashdir" ]] || return 0
+    find "$trashdir" -mindepth 2 -type f -name "*.md" -printf "%P\n" \
+        | sed 's/\.md$//' \
+        | sort -r
+}
+
+restore_note() {
+    purge_trash
+    local entry
+    entry=$(
+        _trash_entries | fzf \
+            --prompt=" restore > " \
+            --height=60% \
+            --layout=reverse \
+            --border=rounded \
+            --preview="bat --style=numbers --color=always '$trashdir/{}.md' 2>/dev/null" \
+            --preview-window=right:55%:wrap \
+            --color="prompt:#83a598,pointer:#fabd2f"
+    ) || return 0
+    [[ -z "$entry" ]] && return 0
+
+    local stamp="${entry%%/*}"
+    local note="${entry#*/}"
+    local dest="$folder/$note.md"
+
+    if [[ -e "$dest" ]]; then
+        echo "✗ '$note' already exists — rename it first"
+        sleep 1.5
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$dest")"
+    mv -n "$trashdir/$entry.md" "$dest"
+    find "$trashdir/$stamp" -type d -empty -delete 2>/dev/null || true
+    echo "✓ restored $note"
+    sleep 0.8
+}

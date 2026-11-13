@@ -1,0 +1,75 @@
+server_start() {
+    if _mkdocs_running; then
+        echo "→ mkdocs already running (pid $(cat "$MKDOCS_PID_FILE"))"
+        open_url "http://127.0.0.1:${MKDOCS_PORT}"
+        return
+    fi
+
+    if ! command -v mkdocs &>/dev/null; then
+        echo "✗ mkdocs not installed"
+        return 1
+    fi
+
+    if port_in_use "$MKDOCS_PORT"; then
+        echo "✗ Port ${MKDOCS_PORT} already in use"
+        return 1
+    fi
+
+    local mkdocs_root
+    mkdocs_root="$(dirname "$folder")"
+
+    ( cd "$mkdocs_root" && nohup mkdocs serve --dev-addr "127.0.0.1:${MKDOCS_PORT}" \
+        > "$MKDOCS_LOG" 2>&1 & echo $! > "$MKDOCS_PID_FILE" )
+    sleep 1
+
+    echo -n "→ waiting for mkdocs"
+    local i=0
+    while true; do
+        local code
+        code=$(curl -sf -o /dev/null -w "%{http_code}" \
+            "http://127.0.0.1:${MKDOCS_PORT}" 2>/dev/null) || true
+        [[ "$code" == "200" ]] && break
+        sleep 0.5
+        echo -n "."
+        (( i++ )) || true
+        if (( i >= 20 )); then
+            echo ""
+            echo "✗ timeout — check $MKDOCS_LOG"
+            rm -f "$MKDOCS_PID_FILE"
+            return 1
+        fi
+    done
+
+    echo ""
+    echo "✓ http://127.0.0.1:${MKDOCS_PORT}"
+    open_url "http://127.0.0.1:${MKDOCS_PORT}"
+}
+
+server_stop() {
+    if ! _mkdocs_running; then
+        echo "→ mkdocs not running"
+        rm -f "$MKDOCS_PID_FILE"
+        return
+    fi
+
+    local pid i
+    pid=$(cat "$MKDOCS_PID_FILE")
+    kill "$pid" 2>/dev/null || true
+    # arrêt propre (SIGTERM), SIGKILL seulement si toujours vivant après 3 s
+    for i in {1..6}; do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.5
+    done
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+    rm -f "$MKDOCS_PID_FILE"
+    echo "✓ mkdocs stopped (pid $pid)"
+}
+
+server_status() {
+    if _mkdocs_running; then
+        echo "✓ mkdocs running — pid $(cat "$MKDOCS_PID_FILE") — http://127.0.0.1:${MKDOCS_PORT}"
+    else
+        echo "✗ mkdocs not running"
+        rm -f "$MKDOCS_PID_FILE" 2>/dev/null
+    fi
+}

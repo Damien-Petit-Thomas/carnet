@@ -1,0 +1,136 @@
+# Triage de inbox/ et wip/, revue hebdomadaire des dailies.
+
+triage() {
+    local files=() f
+    while IFS= read -r -d '' f; do
+        files+=("$f")
+    done < <(find "$inboxdir" "$wipdir" -type f -name "*.md" ! -path "*/assets/*" \
+                -print0 2>/dev/null | sort -z)
+
+    if (( ${#files[@]} == 0 )); then
+        echo "✓ inbox & wip empty"
+        sleep 1
+        return 0
+    fi
+
+    local i=0 total=${#files[@]} stop=0
+    for f in "${files[@]}"; do
+        i=$((i + 1))
+        [[ -f "$f" ]] || continue
+        local rel="${f#$folder/}"
+        rel="${rel%.md}"
+
+        # on reste sur la note tant qu'elle n'est pas traitée (edit, rename…)
+        while true; do
+            local action
+            action=$(
+                printf '%s\n' "→ keep" "✎ edit" " rename" " move" "✗ delete" "■ stop" \
+                | fzf \
+                    --prompt="  [$i/$total] $rel > " \
+                    --height=80% \
+                    --layout=reverse \
+                    --border=rounded \
+                    --preview="bat --style=numbers --color=always $(printf '%q' "$folder/$rel.md") 2>/dev/null" \
+                    --preview-window=right:65%:wrap \
+                    --color="prompt:#fabd2f,pointer:#fb4934"
+            ) || { stop=1; break; }
+
+            case "$action" in
+                "→ keep")   break ;;
+                "✎ edit")   open_editor "$folder/$rel.md" ;;
+                " rename")  rename_note "$rel"; rel="$last_note" ;;
+                " move")    move_note "$rel"
+                            [[ "$last_note" != "$rel" ]] && break ;;
+                "✗ delete") delete_note "$rel"
+                            [[ -f "$folder/$rel.md" ]] || break ;;
+                "■ stop")   stop=1; break ;;
+            esac
+        done
+        (( stop )) && break
+    done
+
+    find "$wipdir" "$inboxdir" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+    return 0
+}
+
+# Lundi de la semaine courante moins N semaines (AAAA-MM-JJ, date BSD).
+_week_monday() {
+    local back="${1:-0}" dow
+    dow=$(date +%u)
+    date_shift "$(date +%F)" "-$(( dow - 1 + 7 * back ))"
+}
+
+# Construit la revue de la semaine (markdown) sur la sortie standard.
+_week_report() {
+    local monday="$1" days=() d i files=()
+    for i in 0 1 2 3 4 5 6; do
+        d=$(date_shift "$monday" "$i")
+        days+=("$d")
+        [[ -f "$dailydir/$d.md" ]] && files+=("$dailydir/$d.md")
+    done
+    local week
+    week=$(date_shift "$monday" 0 %G-W%V)
+
+    printf -- '---\ntags:\n  - review\ndate: %s\n---\n\n' "$(date +%F)"
+    printf '# %s (%s → %s)\n\n' "$week" "${days[0]}" "${days[6]}"
+
+    if (( ${#files[@]} == 0 )); then
+        printf '_no daily notes this week_\n'
+        return 0
+    fi
+
+    local done_list open_list
+    done_list=$(rg --no-filename '^\s*- \[[xX]\]' "${files[@]}" 2>/dev/null || true)
+    open_list=$(rg --no-filename '^\s*- \[ \]\s+\S' "${files[@]}" 2>/dev/null || true)
+
+    printf '## ✓ done (%s)\n\n' "$(grep -c . <<< "$done_list" || true)"
+    [[ -n "$done_list" ]] && printf '%s\n' "$done_list"
+    printf '\n## ☐ open (%s)\n\n' "$(grep -c . <<< "$open_list" || true)"
+    [[ -n "$open_list" ]] && printf '%s\n' "$open_list"
+
+    local file
+    for file in "${files[@]}"; do
+        printf '\n## %s\n\n' "$(basename "${file%.md}")"
+        # sans frontmatter, titre ni lien "←" ; titres décalés d'un niveau
+        awk '
+            NR == 1 && $0 == "---" { fm = 1; next }
+            fm { if ($0 == "---") fm = 0; next }
+            /^# / || /^\[← / { next }
+            /^#/ { $0 = "#" $0 }
+            { print }
+        ' "$file" | cat -s
+    done
+}
+
+week_review() {
+    local back="${1:-0}"
+    if ! [[ "$back" =~ ^[0-9]+$ ]]; then
+        echo "✗ usage: carnet week [N semaines en arrière]"
+        return 1
+    fi
+
+    local monday report week
+    monday=$(_week_monday "$back")
+    week=$(date_shift "$monday" 0 %G-W%V)
+    report=$(mktemp)
+    _week_report "$monday" > "$report"
+
+    bat --paging=always --style=plain --color=always -l md "$report"
+
+    local answer
+    echo -n " save as reviews/$week.md ? [y/N]: "
+    read -re answer
+    if [[ "$answer" == "y" && -e "$folder/reviews/$week.md" ]]; then
+        echo -n " reviews/$week.md exists, overwrite ? [y/N]: "
+        read -re answer
+    fi
+    if [[ "$answer" == "y" ]]; then
+        mkdir -p "$folder/reviews"
+        mv "$report" "$folder/reviews/$week.md"
+        echo "✓ saved reviews/$week.md"
+        sleep 0.8
+    else
+        rm -f "$report"
+    fi
+    return 0
+}

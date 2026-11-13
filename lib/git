@@ -1,0 +1,43 @@
+git_sync() {
+    (
+        cd "$folder"
+
+        if ! git rev-parse --git-dir &>/dev/null; then
+            echo "✗ Not a git repository: $folder"
+            sleep 1.5
+            exit 1
+        fi
+
+        # tout le dépôt (mkdocs.yml, templates…), pas seulement le dossier de notes
+        cd "$(git rev-parse --show-toplevel)"
+
+        if [[ -z "$(git status --porcelain)" ]]; then
+            echo "→ Nothing to commit"
+            sleep 1
+            exit 0
+        fi
+
+        git add -A
+        git commit -q -m "notes update $(date +%F\ %H:%M:%S)"
+        if git push -q; then
+            notify "Notes synced"
+        else
+            echo "✗ Push failed"
+        fi
+        sleep 1
+    )
+}
+
+# Sync silencieuse en arrière-plan ; un verrou évite deux syncs simultanées.
+git_sync_background() {
+    git -C "$folder" rev-parse --git-dir &>/dev/null || return 0
+    (
+        mkdir "$CARNET_LOCK" 2>/dev/null || exit 0
+        trap 'rmdir "$CARNET_LOCK"' EXIT
+        cd "$(git -C "$folder" rev-parse --show-toplevel)"
+        [[ -z "$(git status --porcelain)" ]] && exit 0
+        git add -A && git commit -q -m "notes update $(date +%F\ %H:%M:%S)" \
+            && git push -q || notify "✗ autosync failed"
+    ) &>/dev/null &
+    disown
+}
