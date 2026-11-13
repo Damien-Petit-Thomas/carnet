@@ -10,6 +10,7 @@ setup() {
     export CARNET_DIR="$T/docs" CARNET_TRASH_DIR="$T/trash" \
            CARNET_TEMPLATES_DIR="$T/templates" CARNET_BACKUP_DIR="$T/bk" \
            EDITOR=true CARNET_AUTOSYNC=0
+    export TMPDIR="$T/tmp"; mkdir -p "$TMPDIR"
     mkdir -p "$CARNET_DIR/daily" "$CARNET_DIR/infra"
 }
 
@@ -20,7 +21,7 @@ teardown() {
 load_lib() {
     CARNET_ROOT="$ROOT"
     CARNET_BIN="$CARNET"
-    for m in config platform utils core notes search trash links review git lexicon; do
+    for m in config platform utils core server notes search trash links review git lexicon; do
         source "$ROOT/lib/$m"
     done
     _setup_shims
@@ -287,4 +288,27 @@ today() { date +%F; }
     run "$T/lien" version
     [ "$status" -eq 0 ]
     [[ "$output" == "carnet "* ]]
+}
+
+# ─── serveur mkdocs ───────────────────────────────────────────────────
+
+@test "serve / stop : le PID enregistré est celui de mkdocs, stop l'arrête" {
+    command -v python3 || skip "python3 absent"
+    mkdir -p "$T/fake"
+    cat > "$T/fake/mkdocs" <<'SH'
+#!/usr/bin/env bash
+# faux mkdocs : "serve --dev-addr HOST:PORT" → petit serveur HTTP
+exec python3 -m http.server --bind 127.0.0.1 "${3##*:}"
+SH
+    chmod +x "$T/fake/mkdocs"
+    export PATH="$T/fake:$PATH" MKDOCS_PORT=$(( 20000 + RANDOM % 20000 ))
+    load_lib
+    unset -f sleep          # server_start attend vraiment le serveur
+    open_url() { :; }
+    server_start || { cat "$MKDOCS_LOG"; false; }
+    pid=$(cat "$MKDOCS_PID_FILE")
+    ps -o command= -p "$pid" | grep -q 'http.server'
+    server_stop
+    sleep 0.5
+    ! kill -0 "$pid" 2>/dev/null
 }

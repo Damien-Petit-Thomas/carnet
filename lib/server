@@ -18,8 +18,12 @@ server_start() {
     local mkdocs_root
     mkdocs_root="$(dirname "$folder")"
 
-    ( cd "$mkdocs_root" && nohup mkdocs serve --dev-addr "127.0.0.1:${MKDOCS_PORT}" \
-        > "$MKDOCS_LOG" 2>&1 & echo $! > "$MKDOCS_PID_FILE" )
+    # mkdocs lancé comme commande simple : $! est bien son PID
+    (
+        cd "$mkdocs_root" || exit 1
+        nohup mkdocs serve --dev-addr "127.0.0.1:${MKDOCS_PORT}" > "$MKDOCS_LOG" 2>&1 &
+        echo $! > "$MKDOCS_PID_FILE"
+    )
     sleep 1
 
     echo -n "→ waiting for mkdocs"
@@ -54,6 +58,8 @@ server_stop() {
 
     local pid i
     pid=$(cat "$MKDOCS_PID_FILE")
+    # enfants d'abord (anciens fichiers PID qui pointaient sur un sous-shell)
+    pkill -P "$pid" 2>/dev/null || true
     kill "$pid" 2>/dev/null || true
     # arrêt propre (SIGTERM), SIGKILL seulement si toujours vivant après 3 s
     for i in {1..6}; do
